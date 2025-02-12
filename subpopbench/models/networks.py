@@ -63,10 +63,14 @@ class ResNet(PretrainedImageModel):
         super(ResNet, self).__init__()
 
         if hparams['resnet18']:
-            self.network = torchvision.models.resnet18(pretrained=pretrained)
+            self.network = torchvision.models.resnet18(pretrained=False)
+            if pretrained:
+                self.network.load_state_dict(torch.load("/PNXbench/SubpopBench/subpopbench/pretrained_models"))
             self.n_outputs = 512
         else:
-            self.network = torchvision.models.resnet50(pretrained=pretrained)
+            self.network = torchvision.models.resnet50(pretrained=False)
+            if pretrained:
+                self.network.load_state_dict(torch.load("/PNXbench/SubpopBench/subpopbench/pretrained_models"))
             self.n_outputs = 2048
 
         # adapt number of channels

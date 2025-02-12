@@ -28,9 +28,9 @@ if __name__ == "__main__":
 
     SELECTION_METHODS = [
         # model_selection.OracleMeanAcc,
-        # model_selection.OracleWorstAcc,
+        model_selection.OracleWorstAcc,
         # model_selection.ValMeanAcc,
-        model_selection.ValWorstAccAttributeYes,
+        # model_selection.ValWorstAccAttributeYes,
         # model_selection.ValWorstAccAttributeNo,
         # model_selection.ValMeanPrecision,
         # model_selection.ValWorstPrecision,

@@ -29,7 +29,8 @@ DATASETS = [
     "Living17",
     "Entity13",
     "Entity30",
-    "Nonliving26"
+    "Nonliving26",
+    "PnuDataset"
 ]
 
 
@@ -514,3 +515,146 @@ class Nonliving26(BREEDSBase):
     def __init__(self, data_path, split, hparams, train_attr='no', subsample_type=None, duplicates=None):
         metadata = os.path.join(data_path, "breeds", "metadata_nonliving26.csv")
         super().__init__(metadata, split, train_attr, subsample_type, duplicates)
+
+
+class PnuDataset(SubpopDataset):
+    N_STEPS = 5001           # Match default from SubpopDataset
+    CHECKPOINT_FREQ = 100    # Match default from SubpopDataset
+    INPUT_SHAPE = (3, 224, 224)
+    data_type = "images"
+    
+    def __init__(self, data_path, split, hparams, train_attr='yes', subsample_type=None, duplicates=None):
+        """
+        Args:
+            data_path: Root path to data directory
+            split: One of ['tr', 'va', 'te'] for train/val/test
+            hparams: Dictionary containing:
+                - bias_type: One of ['none', 'spatial', 'spectral', 'both']
+                - bias_ratio_train: Ratio of biased samples in training
+                - bias_ratio_test: Ratio of biased samples in test
+        """
+        self.hparams = hparams
+        self.cache = {}
+        
+        # Load the npz data
+        # Use the original data path
+        data = np.load('/scratch/ssd004/scratch/balu/MedMNIST/pneumoniamnist_224.npz')
+        
+        # Map split to appropriate data
+        split_map = {'tr': 'train', 'va': 'valid', 'te': 'test'}
+        dataset_split = split_map[split]
+        
+        # Load appropriate split
+        self.images = data[f'{dataset_split}_images']
+        self.labels = data[f'{dataset_split}_labels'].squeeze()
+        
+        # Create DataFrame with required columns
+        df = pd.DataFrame()
+        df['filename'] = np.arange(len(self.images))  # Use indices as filenames
+        df['y'] = self.labels
+        
+        # Set up bias configuration based on hparams
+        bias_type = hparams.get('bias_type', 'spatial')
+        bias_ratio = hparams.get('bias_ratio_train', 0.9) if split == 'tr' else hparams.get('bias_ratio_test', 0.5)
+        
+        # Create bias labels
+        bias_map = {'none': 0, 'spatial': 1, 'spectral': 2, 'both': 3}
+        if bias_type == 'none':
+            df['a'] = 0
+        else:
+            # Assign biased (1) and unbiased (0) based on ratio
+            n_samples = len(df)
+            n_biased = int(n_samples * bias_ratio)
+            bias_labels = np.zeros(n_samples)
+            bias_labels[:n_biased] = bias_map[bias_type]
+            np.random.shuffle(bias_labels)
+            df['a'] = bias_labels
+        
+        # Set up transforms
+        self.transform_ = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                              std=[0.229, 0.224, 0.225])
+        ])
+        
+        # Create metadata path in the same directory as the npz file
+        metadata_path = Path('/scratch/ssd004/scratch/balu/MedMNIST/pnu_metadata.csv')
+        df['split'] = self.SPLITS[split]
+        df.to_csv(metadata_path, index=False)
+        
+        # Initialize parent class
+        super().__init__(str(data_path), split, str(metadata_path), 
+                        self.transform, train_attr, subsample_type, duplicates)
+    
+    def apply_bias(self, img, label, bias_type):
+        """Apply the specified type of bias to the image."""
+        img = Image.fromarray(img).convert('RGB')
+        
+        if bias_type == 0:  # no bias
+            return img
+            
+        def apply_spatial_bias(image):
+            draw = ImageDraw.Draw(image)
+            width, height = image.size
+            font_size = min(width, height) // 15
+            try:
+                font = ImageFont.truetype("DejaVuSans.ttf", font_size)
+            except:
+                # Fallback if font not available
+                font = None
+            padding = width // 10
+            
+            if label == 0:
+                # Add 'R' to top left
+                draw.text((padding, padding), 'R', fill=(255, 255, 255), font=font)
+            else:
+                # Add 'L' to top right
+                text_width = font.getlength('L') if font else font_size
+                draw.text((width - padding - text_width, padding), 'L',
+                         fill=(255, 255, 255), font=font)
+            return image
+
+        def apply_spectral_bias(image):
+            img_array = np.array(image)
+            if label == 0:
+                # Increase brightness by 10%
+                img_array = img_array * 1.1
+            else:
+                # Decrease brightness by 10%
+                img_array = img_array * 0.9
+            img_array = np.clip(img_array, 0, 255).astype(np.uint8)
+            return Image.fromarray(img_array)
+            
+        # Apply biases based on bias_type
+        if bias_type == 1:  # spatial only
+            img = apply_spatial_bias(img)
+        elif bias_type == 2:  # spectral only
+            img = apply_spectral_bias(img)
+        elif bias_type == 3:  # both
+            img = apply_spatial_bias(img)
+            img = apply_spectral_bias(img)
+            
+        return img
+
+    def transform(self, idx):
+        """Transform function required by SubpopDataset."""
+        # Convert string index back to integer
+        idx = int(idx)
+        
+        # Get image and apply bias
+        img = self.images[idx]
+        y = self.y[idx]
+        a = self.a[idx]
+        
+        # Cache mechanism
+        cache_key = (idx, y, a)
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+            
+        # Apply bias and transform
+        img = self.apply_bias(img, y, a)
+        img_tensor = self.transform_(img)
+        
+        # Cache result
+        self.cache[cache_key] = img_tensor
+        return img_tensor
